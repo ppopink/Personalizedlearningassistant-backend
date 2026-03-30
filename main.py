@@ -1,10 +1,12 @@
+# main.py
 from fastapi import FastAPI
+from pydantic import BaseModel
 from fastapi.middleware.cors import CORSMiddleware
+from services.llm_client import get_ai_response # 引入 AI 服务
 
-# 初始化后端应用
 app = FastAPI(title="AI Agent 后端", version="1.0")
 
-# 允许前端访问（前后端必备）
+# 允许跨域（前端调用必配）
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -13,25 +15,16 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ----------------------
-# 测试接口（看看后端活没活）
-# ----------------------
-@app.get("/")
-def home():
-    return {
-        "status": "运行成功",
-        "message": "AI Agent 后端已启动！"
-    }
+# 定义请求体的数据格式
+class ChatRequest(BaseModel):
+    message: str
 
-# ----------------------
-# AI Agent 核心接口
-# ----------------------
 @app.post("/api/agent")
-def agent_chat(message: str):
-    # 这里未来可以接 GPT / 通义千问 / 本地大模型
-    reply = f"AI 已收到：{message}，我是你的智能助手！"
-
+async def agent_chat(request: ChatRequest):
+    # 这里真正去调用通义千问了！
+    reply = await get_ai_response(request.message)
+    
     return {
-        "user_message": message,
+        "user_message": request.message,
         "ai_reply": reply
     }
