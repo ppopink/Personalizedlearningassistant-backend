@@ -61,7 +61,9 @@ class ChatMessage(BaseModel):
 
 class ChatRequest(BaseModel):
     messages: List[ChatMessage]  # 接收消息列表（历史记录）
-    username: str = "default_user" 
+    username: str = "default_user"
+    current_question: Optional[Dict] = None # 🚨 新增：当前题目上下文
+    persona: str = "鼓励型"               # 🚨 新增：导师性格设定
 
 class UserProfileRequest(BaseModel):
     username: str
@@ -148,10 +150,31 @@ async def chat_with_agent(request: ChatRequest, db: Session = Depends(get_db)):
 async def chat_with_agent_stream(request: ChatRequest, db: Session = Depends(get_db)):
     async def generate_response():
         try:
-            system_content = get_system_prompt_with_memory(request.username, db)
+            # 1. 获取基础记忆（用户背景与薄弱点）
+            base_memory = get_system_prompt_with_memory(request.username, db)
             
-            # 🚨 核心逻辑：同样更新流式对话的历史消息组装
-            messages = [{"role": "system", "content": system_content}]
+            # 2. 注入“核弹级”场景判断逻辑
+            current_q_title = request.current_question.get('title', '未知') if request.current_question else '未选定题目'
+            
+            system_prompt = f"""
+            {base_memory}
+            你现在的具体身份是：AI编程私教。性格设定为：{request.persona}。
+            用户当前正在挑战的题目是：【{current_q_title}】
+            
+            【🚨 极其重要的最高行为准则 🚨】
+            在回复前，请务必先判断用户的最新发言属于以下哪种情况，并严格执行对应策略：
+            
+            情况 A（求助原题）：用户在询问这道题怎么做、请求代码提示、或者反馈代码报错。
+            -> 策略：严格遵守【启发式教学】！循序渐进地给出思考方向，绝对禁止直接给出完整答案或代码。
+            
+            情况 B（知识延伸/偏题）：用户问了与当前题目原意无关的扩展知识（例如：“那 Java 怎么写？”、“什么是二叉树？”、“这块语法还有别的用法吗？”）。
+            -> 策略：【立即放下原题执念】！停止催促做题，直接、详细、充满热情地解答用户的新疑问！绝对不允许在未解决新疑问前强行拉回到原题！
+            
+            请始终使用 Markdown 格式输出。
+            """
+            
+            # 3. 组装完整记忆链（系统指令 + 历史对话）
+            messages = [{"role": "system", "content": system_prompt}]
             for msg in request.messages:
                 messages.append({"role": msg.role, "content": msg.content})
             
