@@ -1,6 +1,7 @@
 import os
 import json
 import asyncio
+from typing import List, Dict, Optional
 from fastapi import FastAPI, HTTPException, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
@@ -54,9 +55,13 @@ def on_startup():
     init_db()
 
 # 5. 定义数据格式
+class ChatMessage(BaseModel):
+    role: str
+    content: str
+
 class ChatRequest(BaseModel):
-    message: str
-    username: str = "default_user" # 临时默认用户
+    messages: List[ChatMessage]  # 接收消息列表（历史记录）
+    username: str = "default_user" 
 
 class UserProfileRequest(BaseModel):
     username: str
@@ -76,12 +81,12 @@ class SyllabusRequest(BaseModel):
     course_name: str     # 例如: "Python 基础"
     user_background: str # 例如: "零基础，喜欢先动手后看理论，每天1小时"
 
-# 定义答题导师接收的数据格式 (加入了题目上下文)
+# 定义答题导师接收的数据格式 (支持历史记录和题目上下文)
 class TutorRequest(BaseModel):
+    messages: List[ChatMessage] # 🚨 核心变化：接收数组（对话历史）
     question_context: str  # 当前这道题的题干和选项
-    user_action: str       # 用户的行为 (例如："选错了D" 或 "点击了[给个提示]")
-    message: str           # 用户具体输入的话
-    tutor_style: str = "鼓励引导型"  # 🚨 新增：导师风格
+    user_action: str       # 用户的行为
+    tutor_style: str = "鼓励引导型" 
 
 # 定义前端传过来的学习情况总结数据
 class NoteRequest(BaseModel):
@@ -119,11 +124,10 @@ async def chat_with_agent(request: ChatRequest, db: Session = Depends(get_db)):
     try:
         system_content = get_system_prompt_with_memory(request.username, db)
         
-        # 组装消息，加入 System Prompt 设定它的角色
-        messages = [
-            {"role": "system", "content": system_content},
-            {"role": "user", "content": request.message}
-        ]
+        # 🚨 核心逻辑：组装历史消息
+        messages = [{"role": "system", "content": system_content}]
+        for msg in request.messages:
+            messages.append({"role": msg.role, "content": msg.content})
 
         # 调用千问大模型 (这里以 qwen-plus 为例，你可以根据需要换成 qwen-max 等)
         response = client.chat.completions.create(
@@ -146,10 +150,10 @@ async def chat_with_agent_stream(request: ChatRequest, db: Session = Depends(get
         try:
             system_content = get_system_prompt_with_memory(request.username, db)
             
-            messages = [
-                {"role": "system", "content": system_content},
-                {"role": "user", "content": request.message}
-            ]
+            # 🚨 核心逻辑：同样更新流式对话的历史消息组装
+            messages = [{"role": "system", "content": system_content}]
+            for msg in request.messages:
+                messages.append({"role": msg.role, "content": msg.content})
             
             # 使用流式返回
             response = client.chat.completions.create(
@@ -315,10 +319,10 @@ async def tutor_chat_stream(request: TutorRequest):
         请始终保持你的导师性格，使用 Markdown 格式输出。
         """
         
-        messages = [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": request.message}
-        ]
+        # 🚨 核心升级：组装系统提示词与历史对话记录
+        messages = [{"role": "system", "content": system_prompt}]
+        for msg in request.messages:
+            messages.append({"role": msg.role, "content": msg.content})
         
         try:
             response = client.chat.completions.create(
