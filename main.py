@@ -21,10 +21,14 @@ if not QWEN_API_KEY:
 # 2. 初始化 FastAPI 实例
 app = FastAPI(title="AI 编程私教 API")
 
-# 配置 CORS：允许所有来源访问（本地开发阶段最方便）
+# 配置 CORS：允许本地开发域名和 Vercel 生产域名访问
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # 允许跨域的域名列表
+    allow_origins=[
+        "http://localhost:5173",          # Vite 默认本地端口
+        "http://127.0.0.1:5173",          # 备用本地地址
+        "https://你的前端名字.vercel.app",   # 🚨 请将此处替换为你真实的 Vercel 部署域名！
+    ],
     allow_credentials=True,
     allow_methods=["*"],  # 允许的请求方法
     allow_headers=["*"],  # 允许的请求头
