@@ -28,7 +28,7 @@ app.add_middleware(
     allow_origins=[
         "http://localhost:5173",          # Vite 默认本地端口
         "http://127.0.0.1:5173",          # 备用本地地址
-        "https://你的前端名字.vercel.app",   # 🚨 请将此处替换为你真实的 Vercel 部署域名！
+        "https://my-ai-frontend.vercel.app",   # 🚨 请将此处替换为你真实的 Vercel 部署域名！
     ],
     allow_credentials=True,
     allow_methods=["*"],  # 允许的请求方法
@@ -99,6 +99,12 @@ class NoteRequest(BaseModel):
 # 定义脑图提取请求体
 class MindmapOnlyRequest(BaseModel):
     content: str  # 用户自己写的笔记内容
+
+# 定义生成题目请求体
+class QuestionRequest(BaseModel):
+    course_id: str
+    section_id: str
+    section_title: str
 
 # 6. 辅助函数：构建带有“记忆”的 System Prompt
 def get_system_prompt_with_memory(username: str, db: Session):
@@ -441,6 +447,66 @@ async def extract_mindmap(request: MindmapOnlyRequest):
         return {"status": "success", "data": mermaid_code}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+# 16. 新增：动态生成测试题的接口
+@app.post("/api/study/generate-questions")
+async def generate_questions(request: QuestionRequest):
+    system_prompt = """
+    你是一个专业的编程课程教研员。请根据用户提供的课程和章节信息，生成 3 道测试题。
+    测试题必须包含选择题和填空题（至少各一道）。
+    
+    【极其重要的输出格式要求】
+    你必须且只能返回一个合法的 JSON 数组，不要包含任何 Markdown 标记，不要用 ```json 包裹，直接输出纯净的 JSON 字符串。
+    
+    JSON 格式示例：
+    [
+      {
+        "id": "q1",
+        "type": "choice",
+        "question": "Python 是一种什么语言？",
+        "options": [
+          {"label": "A", "text": "编译型"},
+          {"label": "B", "text": "解释型"},
+          {"label": "C", "text": "标记型"},
+          {"label": "D", "text": "汇编型"}
+        ],
+        "answer": "B",
+        "explanation": "Python 是一种解释型语言，代码逐行翻译执行。",
+        "hint": "运行代码时需不需要先编译？"
+      },
+      {
+        "id": "q2",
+        "type": "fill",
+        "question": "在命令行查看 Python 版本的命令是 ______",
+        "answer": "python --version",
+        "explanation": "使用 python --version 查看版本。",
+        "hint": "前面是 python，后面带 version"
+      }
+    ]
+    """
+    
+    user_prompt = f"请为课程ID：{request.course_id}，章节：{request.section_title} 生成 3 道题目。"
+    
+    try:
+        response = client.chat.completions.create(
+            model="qwen-plus",
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ]
+        )
+        
+        # 移除可能存在的 Markdown 标记
+        content = response.choices[0].message.content
+        if content.startswith("```json"):
+            content = content.replace("```json", "").replace("```", "").strip()
+        elif content.startswith("```"):
+            content = content.replace("```", "").strip()
+            
+        questions = json.loads(content)
+        return {"status": "success", "data": questions}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"生成题目失败: {str(e)}")
 
 @app.get("/")
 async def root():
