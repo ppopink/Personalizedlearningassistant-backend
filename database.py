@@ -1,5 +1,6 @@
 import os
-from sqlalchemy import create_engine, Column, Integer, String, ForeignKey, JSON
+from sqlalchemy import create_engine, Column, Integer, String, ForeignKey, JSON, Text, DateTime
+from datetime import datetime
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker
 
@@ -56,6 +57,18 @@ class UserSyllabus(Base):
     user_id = Column(String, index=True)    # 用户ID
     course_id = Column(String, index=True)  # 课程ID
     syllabus_data = Column(JSON)            # 直接存储 AI 生成的 JSON 数据
+
+# 4. 🚨 新增：用户笔记表
+class UserNote(Base):
+    __tablename__ = "user_notes"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, index=True)        # 谁写的笔记
+    course_id = Column(String, index=True)      # 是在哪门课写的笔记
+    title = Column(String)                      # 笔记标题
+    content = Column(Text)                      # 笔记正文内容
+    created_at = Column(DateTime, default=datetime.utcnow) # 创建时间
+
 
 # 初始化数据库并建表
 def init_db():

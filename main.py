@@ -1,15 +1,18 @@
 import os
 import json
+import uuid
 import asyncio
+import pdfplumber
+from io import BytesIO
 from typing import List, Dict, Optional
-from fastapi import FastAPI, HTTPException, Depends
+from fastapi import FastAPI, HTTPException, Depends, File, UploadFile, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from dotenv import load_dotenv
 from openai import OpenAI
 from sqlalchemy.orm import Session
-from database import SessionLocal, User, KnowledgeMastery, UserSyllabus, init_db
+from database import SessionLocal, User, KnowledgeMastery, UserSyllabus, UserNote, init_db
 
 # 1. 加载 .env 文件中的环境变量
 load_dotenv()
@@ -106,6 +109,13 @@ class QuestionRequest(BaseModel):
     section_id: str
     section_title: str
 
+# 🚨 新增：创建笔记请求格式
+class CreateNoteRequest(BaseModel):
+    user_id: str
+    course_id: str
+    title: str
+    content: str
+
 # 6. 辅助函数：构建带有“记忆”的 System Prompt
 def get_system_prompt_with_memory(username: str, db: Session):
     # 查询用户信息
@@ -156,28 +166,51 @@ async def chat_with_agent(request: ChatRequest, db: Session = Depends(get_db)):
 async def chat_with_agent_stream(request: ChatRequest, db: Session = Depends(get_db)):
     async def generate_response():
         try:
-            # 1. 获取基础记忆（用户背景与薄弱点）
-            base_memory = get_system_prompt_with_memory(request.username, db)
-            
-            # 2. 注入“核弹级”场景判断逻辑
-            current_q_title = request.current_question.get('title', '未知') if request.current_question else '未选定题目'
-            
-            system_prompt = f"""
-            {base_memory}
-            你现在的具体身份是：AI编程私教。性格设定为：{request.persona}。
-            用户当前正在挑战的题目是：【{current_q_title}】
-            
-            【🚨 极其重要的最高行为准则 🚨】
-            在回复前，请务必先判断用户的最新发言属于以下哪种情况，并严格执行对应策略：
-            
-            情况 A（求助原题）：用户在询问这道题怎么做、请求代码提示、或者反馈代码报错。
-            -> 策略：严格遵守【启发式教学】！循序渐进地给出思考方向，绝对禁止直接给出完整答案或代码。
-            
-            情况 B（知识延伸/偏题）：用户问了与当前题目原意无关的扩展知识（例如：“那 Java 怎么写？”、“什么是二叉树？”、“这块语法还有别的用法吗？”）。
-            -> 策略：【立即放下原题执念】！停止催促做题，直接、详细、充满热情地解答用户的新疑问！绝对不允许在未解决新疑问前强行拉回到原题！
-            
-            请始终使用 Markdown 格式输出。
-            """
+            # 判断当前是“采访模式”还是“做题/辅导模式”
+            # 如果是空字典 {} 或者 null，说明在采访
+            if not request.current_question:
+                system_prompt = """
+                你是一个专业的 AI 课程规划师。你的任务是通过自然的对话，收集用户的学习情报。
+                
+                【🎯 你的核心情报收集清单】：
+                1. 用户的当前基础（零基础/有经验/卡在某个瓶颈）。
+                2. 核心学习目标（找工作/考试/做项目/纯兴趣）。
+                3. 每日或每周可用的学习时间。
+                
+                【💡 你的聊天策略】：
+                - 像真人一样聊天，一次只问一个最需要补充的情报。
+                - 每次回复字数控制在 50 字以内。
+                
+                【🚨 极其重要的终止条件（暗号指令）- 违者断电】：
+                1. 每次回复前，必须在心里核对 3 项情报是否【全部】收集完毕。
+                2. 如果你还在向用户提问（比如问时间、问目标），【绝对、绝对不能】输出暗号！
+                3. 只有当 3 项情报彻底收集完毕，且你不需要再问任何问题时，请在最后一句说“太棒了，请点击下方按钮生成大纲！”，并且在整段话的最末尾，加上这个纯英文字符串：###DONE###
+                
+                错误示范（还在提问就加暗号）："你每天能学多久？###DONE###" ❌
+                正确示范（情报收齐闭环）："我已经完全掌握你的情况了！请点击下方按钮！###DONE###" ✅
+                """
+            else:
+                # ==========================================
+                # 做题阶段：正常加载导师人设和记忆
+                # ==========================================
+                base_memory = get_system_prompt_with_memory(request.username, db)
+                current_q_title = request.current_question.get('title', '未知')
+                system_prompt = f"""
+                {base_memory}
+                你现在的具体身份是：AI编程私教。性格设定为：{request.persona}。
+                用户当前正在挑战的题目是：【{current_q_title}】
+                
+                【🚨 极其重要的最高行为准则 🚨】
+                在回复前，请务必先判断用户的最新发言属于以下哪种情况，并严格执行对应策略：
+                
+                情况 A（求助原题）：用户在询问这道题怎么做、请求代码提示、或者反馈代码报错。
+                -> 策略：严格遵守【启发式教学】！循序渐进地给出思考方向，绝对禁止直接给出完整答案或代码。
+                
+                情况 B（知识延伸/偏题）：用户问了与当前题目原意无关的扩展知识（例如：“那 Java 怎么写？”、“什么是二叉树？”、“这块语法还有别的用法吗？”）。
+                -> 策略：【立即放下原题执念】！停止催促做题，直接、详细、充满热情地解答用户的新疑问！绝对不允许在未解决新疑问前强行拉回到原题！
+                
+                请始终使用 Markdown 格式输出。
+                """
             
             # 3. 组装完整记忆链（系统指令 + 历史对话）
             messages = [{"role": "system", "content": system_prompt}]
@@ -511,3 +544,211 @@ async def generate_questions(request: QuestionRequest):
 @app.get("/")
 async def root():
     return {"message": "AI 后端服务已启动！"}
+
+# 新增：获取用户生成的自定义课程列表
+@app.get("/api/user/custom-courses/{user_id}")
+async def get_user_custom_courses(user_id: str, db: Session = Depends(get_db)):
+    # 去数据库里查询该用户所有以 "custom_" 开头的课程记录
+    courses = db.query(UserSyllabus).filter(
+        UserSyllabus.user_id == user_id,
+        UserSyllabus.course_id.like("custom_%")
+    ).all()
+    
+    # 整理数据返回给前端
+    course_list = []
+    for c in courses:
+        title = "专属定制课程"
+        # 尝试从 JSON 数据中读取 course_title，如果之前存了的话
+        if isinstance(c.syllabus_data, dict) and "course_title" in c.syllabus_data:
+            title = c.syllabus_data["course_title"]
+
+        course_list.append({
+            "course_id": c.course_id,
+            "title": title,
+        })
+        
+    return {"status": "success", "data": course_list}
+
+# 新增：删除自定义课程的接口
+@app.delete("/api/user/custom-courses/{course_id}")
+async def delete_custom_course(course_id: str, db: Session = Depends(get_db)):
+    # 去数据库里找到这门课
+    course = db.query(UserSyllabus).filter(UserSyllabus.course_id == course_id).first()
+    
+    if not course:
+        raise HTTPException(status_code=404, detail="未找到该课程")
+        
+    # 执行删除并提交
+    db.delete(course)
+    db.commit()
+    
+    return {"status": "success", "message": "课程已永久删除"}
+
+# -------------------------------------------
+# 📝 笔记系统核心接口
+# -------------------------------------------
+
+# 1. 保存新笔记
+@app.post("/api/notes/save")
+async def save_user_note(request: CreateNoteRequest, db: Session = Depends(get_db)):
+    try:
+        new_note = UserNote(
+            user_id=request.user_id,
+            course_id=request.course_id,
+            title=request.title,
+            content=request.content
+        )
+        db.add(new_note)
+        db.commit()
+        return {"status": "success", "message": "笔记已成功保存入库！"}
+    except Exception as e:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"保存笔记失败: {str(e)}")
+
+# 2. 获取用户的所有笔记（用于渲染那个“笔记”页面）
+@app.get("/api/notes/list/{user_id}")
+async def get_user_notes_list(user_id: str, db: Session = Depends(get_db)):
+    notes = db.query(UserNote).filter(
+        UserNote.user_id == user_id
+    ).order_by(UserNote.created_at.desc()).all()
+    
+    # 整理并返回数据
+    note_list = []
+    for n in notes:
+        note_list.append({
+            "id": n.id,
+            "course_id": n.course_id,
+            "title": n.title,
+            "content": n.content,
+            "created_at": n.created_at.strftime("%Y-%m-%d %H:%M")
+        })
+        
+    return {"status": "success", "data": note_list}
+
+
+
+# 17. 新增：支持 PDF 上传并生成自定义大纲的接口
+@app.post("/api/onboarding/generate-custom-syllabus")
+async def generate_custom_syllabus(
+    file: UploadFile = File(...),
+    course_title: str = Form(...),
+    user_profile: str = Form(...), # 前端传过来的聊天记录字符串或 JSON
+    db: Session = Depends(get_db)  # 🚨 新增：接上数据库水管
+):
+    print(f"🚀 收到自定义课程请求: {course_title}, 文件名: {file.filename}")
+    
+    # ==========================================
+    # 步骤 1：启动“碎纸机”，在内存中读取 PDF 文字
+    # ==========================================
+    try:
+        pdf_bytes = await file.read()
+        extracted_text = ""
+        
+        with pdfplumber.open(BytesIO(pdf_bytes)) as pdf:
+            # ⚠️ 架构师的安全锁：为了防止几百页的PDF直接把大模型的Token撑爆，
+            # 且生成大纲通常只需要看目录和前几页，我们暂时只读取前 10 页的内容。
+            for i, page in enumerate(pdf.pages):
+                if i >= 10: 
+                    extracted_text += "\n...[内容过长，已截断]..."
+                    break
+                text = page.extract_text()
+                if text:
+                    extracted_text += text + "\n"
+                    
+    except Exception as e:
+        print(f"解析 PDF 失败: {str(e)}")
+        raise HTTPException(status_code=400, detail=f"解析 PDF 失败: {str(e)}")
+
+    # ==========================================
+    # 步骤 2：解析用户画像
+    # ==========================================
+    try:
+        profile_data = json.loads(user_profile)
+    except:
+        profile_data = user_profile
+
+    # ==========================================
+    # 步骤 3：拼装“超级 Prompt”，召唤大模型
+    # ==========================================
+    prompt = f"""
+    你是一位顶级的课程规划师。用户想要学习的自定义课程名称是：【{course_title}】。
+    
+    以下是用户上传的专属复习资料/教材的核心内容提取：
+    ---开始---
+    {extracted_text[:6000]}  # 限制最多取6000字，既保证内容丰富，又不超 Token 限制
+    ---结束---
+
+    以下是该用户的学习情况（采访画像）：
+    {profile_data}
+
+    🎯 你的任务：
+    请严格根据以上【用户上传的复习资料内容】和【用户的学习情况】，为他量身定制一个包含“章”和“节”的详细学习大纲。
+    要求：
+    1. 生成 4 到 5 个核心章节（章）。
+    2. 每个章节下，必须提炼出 2 到 4 个具体的核心知识点作为“节”。
+    3. 内容必须紧扣他上传的资料，绝不瞎编乱造！
+    4. 必须严格按照以下 JSON 数组格式返回，直接输出纯 JSON：
+    [
+      {{
+        "title": "第一章：xxx", 
+        "description": "xxx",
+        "sections": [
+            {{"title": "1.1 什么是xxx"}},
+            {{"title": "1.2 xxx的核心原理"}}
+        ]
+      }},
+      {{
+        "title": "第二章：xxx", 
+        "description": "xxx",
+        "sections": [
+            {{"title": "2.1 xxx的分类"}},
+            {{"title": "2.2 xxx的实践"}}
+        ]
+      }}
+    ]
+    """
+
+    try:
+        # 调用通义千问生成大纲
+        response = client.chat.completions.create(
+            model="qwen-plus",
+            messages=[{"role": "user", "content": prompt}]
+        )
+        
+        result_text = response.choices[0].message.content.strip()
+        
+        # 兼容处理：万一大模型不听话加了 ```json 标签，我们帮它去掉
+        if result_text.startswith("```json"):
+            result_text = result_text.replace("```json", "").replace("```", "").strip()
+        elif result_text.startswith("```"):
+            result_text = result_text.replace("```", "").strip()
+
+        # 将字符串转为真实的 JSON 对象
+        syllabus = json.loads(result_text)
+
+        # ==========================================
+        # 🚨 步骤 4：持久化！存入数据库
+        # ==========================================
+        # 为这个自定义课程生成一个独一无二的 ID（比如: custom_8a2b9c）
+        custom_course_id = f"custom_{uuid.uuid4().hex[:8]}"
+        user_id = "user_123" # 暂时用固定测试用户，以后接了登录可以换成真实的
+
+        new_syllabus = UserSyllabus(
+            user_id=user_id,
+            course_id=custom_course_id,
+            syllabus_data=syllabus
+        )
+        db.add(new_syllabus)
+        db.commit()
+
+        # 返回时，不仅把大纲返回给前端，还要把生成的 course_id 也给它
+        return {
+            "status": "success", 
+            "data": syllabus, 
+            "course_id": custom_course_id, # 👈 前端需要拿着个ID
+            "message": "自定义大纲已成功刻入数据库！"
+        }
+    except Exception as e:
+        print("生成大纲失败或解析 JSON 失败:", str(e))
+        db.rollback() # 报错时回滚数据库
+        return {"status": "error", "message": f"生成大纲失败: {str(e)}"}
