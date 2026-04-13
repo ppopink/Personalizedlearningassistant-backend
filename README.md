@@ -68,17 +68,32 @@ uvicorn main:app --reload
 ### 1️⃣ 用户数据与“记忆”
 - `POST /api/user/profile` — 更新/创建用户学习背景资料（基础、目标等）。
 - `POST /api/knowledge/update` — 更新用户对特定知识点的掌握程度和易错总结。
+- `POST /api/interview/start` — 启动 Agent 1 访谈会话，生成第一条“单次单问”问题。
+- `POST /api/interview/reply` — 用户回复访谈内容，后端更新槽位并返回下一问或访谈总结。
+- `GET /api/interview/{session_id}` — 获取一轮完整访谈的上下文、消息记录和结构化结果。
 
 ### 2️⃣ 课程与大纲
+- `POST /api/architect/generate-course-plan` — 启动 Agent 2，读取访谈结果并生成章节、学习目标和练习题一体化课程蓝图。
 - `POST /api/onboarding/generate-syllabus` — 🎲 **核心**：根据用户输入生成 JSON 定制学习路径并保存。
 - `GET /api/curriculum/{user_id}/{course_id}` — 从数据库读取已生成的专属学习大纲。
 
 ### 3️⃣ AI 学习辅导
-- `POST /api/study/tutor-chat/stream` — 💡 **核心**：发起一场流式对话流，传入当前题目信息、用户提问，以及期望的导师风格（`encouraging`, `concise`, `humorous`），获取专属指导。
+- `POST /api/tutor/respond` — Agent 3 非流式调试接口，读取课程蓝图、学习者画像和思维方式脚本后返回陪伴式指导。
+- `POST /api/study/tutor-chat/stream` — 💡 **核心**：Agent 3 流式陪伴导师接口，支持当前章节、小节、题目上下文、导师风格和思维脚本驱动的苏格拉底式引导。
 
-### 4️⃣ 复盘与思维导图
+### 4️⃣ 认知画像
+- `POST /api/profiler/analyze-interaction` — Agent 4 静默分析一次学习交互，提炼偏好、卡点与激励点，并更新用户思维画像。
+- `GET /api/profiler/profile/{user_id}` — 查看用户当前思维画像和最近几次认知观察记录。
+
+### 5️⃣ 复盘与思维导图
+- `POST /api/clerk/generate-note` — Agent 5 读取当前章节、最近交互和认知画像，生成智能笔记与 Mermaid 脑图，并可选自动保存。
 - `POST /api/notes/generate` — 📝 **核心**：提交已学内容和薄弱点，一键生成带有 Mermaid 思维导图的高质量复盘笔记。
 - `POST /api/notes/extract-mindmap` — 🗺️ 提交任意长文本内容，AI 高度提炼精简并返回单纯的 Mermaid 思维导图代码。
+
+### 6️⃣ 全局助手
+- `POST /api/progress/update` — 上报当前课程、章节、小节与完成情况，供全局助手和进度查询使用。
+- `GET /api/progress/{user_id}` — 查询用户全部课程进度；支持通过 `course_id` 查询单门课详细进度。
+- `POST /api/concierge/respond` — Agent 6 全局助手接口，读取进度、课程、笔记和画像后返回平台导航或全局答复，并可携带前端动作建议。
 
 ---
 *“技术是骨架，Prompt 是灵魂，数据是流淌的血肉。”* —— 一款真正有温度的学习工具产品。

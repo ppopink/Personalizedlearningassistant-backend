@@ -69,6 +69,84 @@ class UserNote(Base):
     content = Column(Text)                      # 笔记正文内容
     created_at = Column(DateTime, default=datetime.utcnow) # 创建时间
 
+# 5. Agent 1 访谈会话表
+class InterviewSession(Base):
+    __tablename__ = "interview_sessions"
+
+    id = Column(String, primary_key=True, index=True)
+    user_id = Column(String, index=True, nullable=False)
+    course_id = Column(String, index=True, nullable=False)
+    course_type = Column(String, default="standard")
+    status = Column(String, default="active")
+    question_count = Column(Integer, default=0)
+    max_questions = Column(Integer, default=6)
+    context_data = Column(JSON)
+    slot_state = Column(JSON)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+# 6. Agent 1 访谈消息表
+class InterviewMessage(Base):
+    __tablename__ = "interview_messages"
+
+    id = Column(Integer, primary_key=True, index=True)
+    session_id = Column(String, ForeignKey("interview_sessions.id"), index=True)
+    role = Column(String, nullable=False)
+    content = Column(Text, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+# 7. Agent 1 访谈结果表
+class InterviewResult(Base):
+    __tablename__ = "interview_results"
+
+    session_id = Column(String, ForeignKey("interview_sessions.id"), primary_key=True)
+    result_json = Column(JSON)
+    termination_reason = Column(String)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+# 8. Agent 4 / Agent 3 共用：用户思维方式脚本
+class UserCognitiveProfile(Base):
+    __tablename__ = "user_cognitive_profiles"
+
+    user_id = Column(String, primary_key=True, index=True)
+    profile_json = Column(JSON)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+# 9. Agent 4 认知观察记录
+class CognitiveProfileObservation(Base):
+    __tablename__ = "cognitive_profile_observations"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, index=True, nullable=False)
+    course_id = Column(String, index=True)
+    chapter_id = Column(String, index=True)
+    section_id = Column(String, index=True)
+    interaction_type = Column(String, default="tutor_dialogue")
+    observation_json = Column(JSON)
+    created_at = Column(DateTime, default=datetime.utcnow)
+
+
+# 10. Agent 6 / 全局助手：用户学习进度
+class UserLearningProgress(Base):
+    __tablename__ = "user_learning_progress"
+
+    id = Column(Integer, primary_key=True, index=True)
+    user_id = Column(String, index=True, nullable=False)
+    course_id = Column(String, index=True, nullable=False)
+    current_chapter_id = Column(String, index=True)
+    current_chapter_title = Column(String)
+    current_section_id = Column(String, index=True)
+    current_section_title = Column(String)
+    completed_chapter_ids = Column(JSON)
+    completed_section_ids = Column(JSON)
+    progress_json = Column(JSON)
+    last_activity_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
 
 # 初始化数据库并建表
 def init_db():
