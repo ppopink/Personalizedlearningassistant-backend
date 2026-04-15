@@ -1,156 +1,35 @@
-import os
-from sqlalchemy import create_engine, Column, Integer, String, ForeignKey, JSON, Text, DateTime
-from datetime import datetime
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker
-
-# 🚨 核心修改：优先读取环境变量 DATABASE_URL
-# 如果在本地找不到环境变量，就自动降级使用本地的 sqlite
-SQLALCHEMY_DATABASE_URL = os.getenv("DATABASE_URL")
-
-# 兼容 Render/Heroku 的 postgres:// 协议
-if SQLALCHEMY_DATABASE_URL and SQLALCHEMY_DATABASE_URL.startswith("postgres://"):
-    SQLALCHEMY_DATABASE_URL = SQLALCHEMY_DATABASE_URL.replace("postgres://", "postgresql://", 1)
-
-# 如果环境变量为空，则使用本地 SQLite
-if not SQLALCHEMY_DATABASE_URL:
-    SQLALCHEMY_DATABASE_URL = "sqlite:///./ai_tutor.db"
-
-# 创建数据库引擎
-if SQLALCHEMY_DATABASE_URL.startswith("sqlite"):
-    engine = create_engine(
-        SQLALCHEMY_DATABASE_URL, connect_args={"check_same_thread": False}
-    )
-else:
-    engine = create_engine(SQLALCHEMY_DATABASE_URL)
-
-# 创建会话工厂
-SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
-
-# 创建模型基类
-Base = declarative_base()
-
-# 1. 用户基础信息表
-class User(Base):
-    __tablename__ = "users"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    username = Column(String, unique=True, index=True)
-    background = Column(String)
-    daily_goal_minutes = Column(Integer)
-
-# 2. 知识点掌握度表
-class KnowledgeMastery(Base):
-    __tablename__ = "knowledge_mastery"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, ForeignKey("users.id"))
-    point_name = Column(String, index=True)
-    mastery_score = Column(Integer, default=0)
-    error_summary = Column(String)
-
-# 3. 核心模型：用户学习大纲表
-class UserSyllabus(Base):
-    __tablename__ = "user_syllabus"
-
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(String, index=True)    # 用户ID
-    course_id = Column(String, index=True)  # 课程ID
-    syllabus_data = Column(JSON)            # 直接存储 AI 生成的 JSON 数据
-
-# 4. 🚨 新增：用户笔记表
-class UserNote(Base):
-    __tablename__ = "user_notes"
-    
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(String, index=True)        # 谁写的笔记
-    course_id = Column(String, index=True)      # 是在哪门课写的笔记
-    title = Column(String)                      # 笔记标题
-    content = Column(Text)                      # 笔记正文内容
-    created_at = Column(DateTime, default=datetime.utcnow) # 创建时间
-
-# 5. Agent 1 访谈会话表
-class InterviewSession(Base):
-    __tablename__ = "interview_sessions"
-
-    id = Column(String, primary_key=True, index=True)
-    user_id = Column(String, index=True, nullable=False)
-    course_id = Column(String, index=True, nullable=False)
-    course_type = Column(String, default="standard")
-    status = Column(String, default="active")
-    question_count = Column(Integer, default=0)
-    max_questions = Column(Integer, default=6)
-    context_data = Column(JSON)
-    slot_state = Column(JSON)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+from app.db.models import (
+    CognitiveProfileObservation,
+    InterviewMessage,
+    InterviewResult,
+    InterviewSession,
+    KnowledgeMastery,
+    User,
+    UserCognitiveProfile,
+    UserLearningProgress,
+    UserNote,
+    UserSyllabus,
+)
+from app.db.session import Base, SessionLocal, engine, init_db
 
 
-# 6. Agent 1 访谈消息表
-class InterviewMessage(Base):
-    __tablename__ = "interview_messages"
+__all__ = [
+    "Base",
+    "SessionLocal",
+    "engine",
+    "init_db",
+    "User",
+    "KnowledgeMastery",
+    "UserSyllabus",
+    "UserNote",
+    "InterviewSession",
+    "InterviewMessage",
+    "InterviewResult",
+    "UserCognitiveProfile",
+    "CognitiveProfileObservation",
+    "UserLearningProgress",
+]
 
-    id = Column(Integer, primary_key=True, index=True)
-    session_id = Column(String, ForeignKey("interview_sessions.id"), index=True)
-    role = Column(String, nullable=False)
-    content = Column(Text, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-
-# 7. Agent 1 访谈结果表
-class InterviewResult(Base):
-    __tablename__ = "interview_results"
-
-    session_id = Column(String, ForeignKey("interview_sessions.id"), primary_key=True)
-    result_json = Column(JSON)
-    termination_reason = Column(String)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-
-# 8. Agent 4 / Agent 3 共用：用户思维方式脚本
-class UserCognitiveProfile(Base):
-    __tablename__ = "user_cognitive_profiles"
-
-    user_id = Column(String, primary_key=True, index=True)
-    profile_json = Column(JSON)
-    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-
-# 9. Agent 4 认知观察记录
-class CognitiveProfileObservation(Base):
-    __tablename__ = "cognitive_profile_observations"
-
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(String, index=True, nullable=False)
-    course_id = Column(String, index=True)
-    chapter_id = Column(String, index=True)
-    section_id = Column(String, index=True)
-    interaction_type = Column(String, default="tutor_dialogue")
-    observation_json = Column(JSON)
-    created_at = Column(DateTime, default=datetime.utcnow)
-
-
-# 10. Agent 6 / 全局助手：用户学习进度
-class UserLearningProgress(Base):
-    __tablename__ = "user_learning_progress"
-
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(String, index=True, nullable=False)
-    course_id = Column(String, index=True, nullable=False)
-    current_chapter_id = Column(String, index=True)
-    current_chapter_title = Column(String)
-    current_section_id = Column(String, index=True)
-    current_section_title = Column(String)
-    completed_chapter_ids = Column(JSON)
-    completed_section_ids = Column(JSON)
-    progress_json = Column(JSON)
-    last_activity_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
-
-
-# 初始化数据库并建表
-def init_db():
-    Base.metadata.create_all(bind=engine)
 
 if __name__ == "__main__":
     init_db()
